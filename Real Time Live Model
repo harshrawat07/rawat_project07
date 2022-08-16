@@ -1,0 +1,115 @@
+# import the necessary packages
+from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
+from tensorflow.keras.preprocessing.image import img_to_array
+from tensorflow.keras.models import load_model
+from imutils.video import VideoStream
+import numpy as np
+import imutils
+import time
+import cv2
+import os
+
+def pred_and_locate(picture, faceModel, maskModel):
+    # Construct a blob 
+    (h, w) = picture.shape[:2]
+    blb = cv2.dnn.blobFromImage(picture, 1.0, (224, 224),
+        (104.0, 177.0, 123.0))
+
+    # Using blb we detect picture by passing the blb in faceModel
+    faceModel.setInput(blb)
+    detect = faceModel.forward()
+    print(detect.shape)
+
+    # Now we intialize the list of faces, locations and prediction in which we will save all the computed data
+    faces = []
+    location = []
+    prediction = []
+
+    # Now we itreate a loop over dectet in such a way we that make predctions on each dectection 
+    for i in range(0, detect.shape[2]):
+        #extracting confidence 
+        confidence = detect[0, 0, i, 2]
+        #Now we filter the detections according to confindece using a threshold confidence
+        #Here the threhold confiedence is 0.5
+        if confidence > 0.5:
+            # for filterd detection we find (x,y) coordinates of bounding box
+            box = detect[0, 0, i, 3:7] * np.array([w, h, w, h])
+            (beginX, beginY, endX, endY) = box.astype("int")
+            # Ensuring that every box fall in dimensions of picture
+            (beginX, beginY) = (max(0, beginX), max(0, beginY))
+            (endX, endY) = (min(w - 1, endX), min(h - 1, endY))
+            # extract the face ROI
+            f1 = picture[beginY:endY, beginX:endX]
+            #convert BGR to RGB channel 
+            f1 = cv2.cvtColor(f1, cv2.COLOR_BGR2RGB)
+            #Resize it to 224*224 and preprocessig 
+            f1 = cv2.resize(f1, (224, 224))
+            f1 = img_to_array(f1)
+            f1 = preprocess_input(f1)
+            # add this final face and it's locations in already declare matrix
+            faces.append(f1)
+            location.append((beginX, beginY, endX, endY))
+
+    # Now it turn to make predctions about mask
+    # We need atleast one face for make predctions 
+    if len(faces) > 0:
+        # Here to make it fast we compute all the predction at same time
+        faces = np.array(faces, dtype="float32")
+        predction = maskModel.predict(faces, batch_size=32)
+
+    # return a 2-tuple of the face locations and their corresponding
+    # locations
+    return (location, predction)
+# First we need to take input of face dection model
+prototxtPath = r"C:\Users\Dell\Downloads\Face-Mask-Detection-master\face_detector\deploy.prototxt"
+weightsPath = r"C:\Users\Dell\Downloads\Face-Mask-Detection-master\face_detector\res10_300x300_ssd_iter_140000.caffemodel"
+faceModel = cv2.dnn.readNet(prototxtPath, weightsPath)
+
+# Now load our pre trained mask dection model
+maskModel = load_model(r"C:\Users\Dell\Downloads\Face-Mask-Detection-master\mask_detector.model")
+
+# Start video streaming
+print("[INFO] starting video stream...")
+vid = VideoStream(src=0).start()
+
+# Itreate a loop over each frame/picture in video
+while True: 
+    picture = vid.read()
+    
+    #Resizie each picture in maximum width of 400
+    picture = imutils.resize(picture, width=400)
+
+    # find location and get prediction for each frame
+    (locs, preds) = pred_and_locate(picture, faceModel, maskModel)
+    
+    # loop over the detected face locations and their corresponding
+    # locations
+    for (box, pred) in zip(locs, preds):
+        
+        #unpack all result 
+        (beginX, beginY, endX, endY) = box
+        (mask, withoutMask) = pred
+
+        # determine the class label and color
+        
+        label = "Mask" if mask > withoutMask else "No Mask"
+        color = (0, 255, 0) if label == "Mask" else (0, 0, 255)
+
+        # include the probability in the label
+        label = "{}: {:.2f}%".format(label, max(mask, withoutMask) * 100)
+
+        # display the label and bounding box rectangle on the output picture
+        cv2.putText(picture, label, (beginX, beginY - 10),cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 2)
+        cv2.rectangle(picture, (beginX, beginY), (endX, endY), color, 2)
+
+    # show the output frame
+    cv2.imshow("Frame", picture)
+    key = cv2.waitKey(1) & 0xFF
+
+    # if the `q` key was pressed, break from the loop
+    if key == ord("h"):
+        break
+
+# do a bit of cleanup
+cv2.destroyAllWindows()
+vs.stop()
